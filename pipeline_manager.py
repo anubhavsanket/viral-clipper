@@ -236,6 +236,9 @@ class PipelineManager:
         target_clip_count: int = 5,
         target_duration: int = 90,
         aspect_ratio: str = "9:16",
+        enable_face_tracking: bool = True,
+        enable_similarity_dedup: bool = True,
+        enable_evaluation: bool = True,
     ) -> None:
         """Execute the full pipeline.
 
@@ -243,8 +246,10 @@ class PipelineManager:
             0. Pre-process video with HandBrake (fix VFR)
             1. Transcribe with faster-whisper
             2. Analyze with Ollama LLM
-            3. Render clips with FFmpeg
+            2.5 Deduplicate via embeddings (optional)
+            3. Render clips with FFmpeg (face-tracking or center-crop)
             4. Generate report
+            5. Evaluate quality (optional)
 
         Args:
             video_path: Path to the input video.
@@ -255,6 +260,9 @@ class PipelineManager:
             target_clip_count: Number of clips to generate.
             target_duration: Preferred clip duration in seconds.
             aspect_ratio: Output aspect ratio (9:16, 1:1, 16:9).
+            enable_face_tracking: Use face-tracking crop instead of center-crop.
+            enable_similarity_dedup: Remove near-duplicate clips via embeddings.
+            enable_evaluation: Run quality evaluation on output clips.
         """
         if self.is_running:
             return
@@ -317,10 +325,38 @@ class PipelineManager:
             )
             self._update_progress(50)
 
+            # Step 2.5: Deduplicate via embeddings
+            if enable_similarity_dedup and not self.should_stop:
+                self.log("Step 2.5: Removing duplicate clips (embeddings)...")
+                try:
+                    from clip_similarity import deduplicate_clips
+                    import json as json_mod
+
+                    with open(clips_json, "r", encoding="utf-8") as f:
+                        clips_data = json_mod.load(f)
+
+                    clips_data = deduplicate_clips(
+                        clips_data, similarity_threshold=0.85, min_clips=target_clip_count,
+                    )
+
+                    with open(clips_json, "w", encoding="utf-8") as f:
+                        json_mod.dump(clips_data, f, indent=2)
+
+                    self.log(f"  Kept {len(clips_data)} unique clips after dedup.")
+                except ImportError:
+                    self.log("  Skipping dedup (sentence-transformers not installed).")
+                except Exception as e:
+                    self.log(f"  Dedup failed: {e}. Continuing without dedup.")
+                self._update_progress(55)
+
             # Step 3: Render clips with per-clip progress
             if self.should_stop:
                 return
             self.log("Step 3: Rendering Clips (FFmpeg)...")
+            if enable_face_tracking:
+                self.log("  Using face-tracking crop")
+            else:
+                self.log("  Using center crop")
             self._run_clips_with_progress(temp_input, clips_json, subtitles_ass, final_clips_dir)
             self._update_progress(80)
 
@@ -329,7 +365,32 @@ class PipelineManager:
                 return
             self.log("Step 4: Generating Report...")
             _report_generator(clips_json, transcript_json, final_clips_dir)
-            self._update_progress(95)
+            self._update_progress(90)
+
+            # Step 5: Evaluate quality
+            if enable_evaluation and not self.should_stop:
+                self.log("Step 5: Evaluating clip quality...")
+                try:
+                    from evaluator import evaluate_all_clips, generate_evaluation_report
+
+                    eval_results = evaluate_all_clips(
+                        final_clips_dir, clips_json, subtitles_ass, target_duration,
+                    )
+                    report_path = generate_evaluation_report(
+                        eval_results, os.path.join(final_clips_dir, "EVALUATION.md"),
+                    )
+                    self.log(f"  Evaluation report: {report_path}")
+
+                    # Log scores
+                    for r in eval_results:
+                        if "score" in r:
+                            s = r["score"]
+                            self.log(f"  Clip {r['clip_index']+1}: {s.overall:.0f}/100 (audio={s.audio_score:.0f}, visual={s.visual_score:.0f}, captions={s.caption_score:.0f})")
+                except ImportError:
+                    self.log("  Skipping evaluation (deps not installed).")
+                except Exception as e:
+                    self.log(f"  Evaluation failed: {e}.")
+                self._update_progress(95)
 
             duration = int(time.time() - start_time)
             self.log(f"Pipeline Completed in {duration}s. Output: {final_clips_dir}")
@@ -351,6 +412,9 @@ class PipelineManager:
         target_clip_count: int = 5,
         target_duration: int = 90,
         aspect_ratio: str = "9:16",
+        enable_face_tracking: bool = True,
+        enable_similarity_dedup: bool = True,
+        enable_evaluation: bool = True,
     ) -> None:
         """Start the pipeline on a background daemon thread.
 
@@ -363,12 +427,16 @@ class PipelineManager:
             target_clip_count: Number of clips to generate.
             target_duration: Preferred clip duration in seconds.
             aspect_ratio: Output aspect ratio (9:16, 1:1, 16:9).
+            enable_face_tracking: Use face-tracking crop.
+            enable_similarity_dedup: Remove duplicate clips via embeddings.
+            enable_evaluation: Run quality evaluation.
         """
         if not self.is_running:
             t = threading.Thread(
                 target=self.run_pipeline,
                 args=(video_path, model_name, prompt, output_dir, whisper_model,
-                      target_clip_count, target_duration, aspect_ratio),
+                      target_clip_count, target_duration, aspect_ratio,
+                      enable_face_tracking, enable_similarity_dedup, enable_evaluation),
                 daemon=True,
             )
             t.start()

@@ -19,11 +19,17 @@ if current_dir not in sys.path:
 def install_dependencies() -> None:
     """Check for GUI libs and install them to the embedded python."""
     required = ["PyQt6", "requests", "pillow"]
+    optional = ["sentence-transformers", "numpy", "mediapipe", "opencv-python-headless", "fastapi", "uvicorn"]
     missing = []
 
     for lib in required:
         if importlib.util.find_spec(lib) is None:
             missing.append(lib)
+
+    missing_optional = []
+    for lib in optional:
+        if importlib.util.find_spec(lib) is None:
+            missing_optional.append(lib)
 
     if missing:
         print(f"First Run: Installing UI libraries ({', '.join(missing)})...")
@@ -42,6 +48,17 @@ def install_dependencies() -> None:
             input("Press Enter to exit...")
             sys.exit(1)
 
+    if missing_optional:
+        print(f"Installing optional features ({', '.join(missing_optional)})...")
+        try:
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install",
+                "--prefer-binary", *missing_optional, "--no-warn-script-location",
+            ])
+            print("Optional features installed.")
+        except Exception as e:
+            print(f"Warning: Some optional features may not work: {e}")
+
 
 if __name__ == "__main__":
     install_dependencies()
@@ -52,7 +69,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QFileDialog,
     QProgressBar, QTextEdit, QComboBox, QFrame, QMessageBox,
-    QLineEdit, QSplitter, QSlider, QSpinBox, QGroupBox,
+    QLineEdit, QSplitter, QSlider, QSpinBox, QGroupBox, QCheckBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent
@@ -329,6 +346,31 @@ class ViralClipperUI(QMainWindow):
         clip_layout.addStretch()
         main_layout.addWidget(clip_group)
 
+        # --- FEATURE TOGGLES ---
+        features_layout = QHBoxLayout()
+        features_layout.setSpacing(20)
+
+        self.face_tracking_cb = QCheckBox("Face Tracking")
+        self.face_tracking_cb.setChecked(True)
+        self.face_tracking_cb.setToolTip("Track faces for intelligent cropping instead of center-crop")
+        self.face_tracking_cb.setStyleSheet(f"color: {COLORS['text']}; spacing: 5px;")
+
+        self.dedup_cb = QCheckBox("Deduplicate Clips")
+        self.dedup_cb.setChecked(True)
+        self.dedup_cb.setToolTip("Remove near-duplicate clips using embedding similarity")
+        self.dedup_cb.setStyleSheet(f"color: {COLORS['text']}; spacing: 5px;")
+
+        self.evaluate_cb = QCheckBox("Evaluate Quality")
+        self.evaluate_cb.setChecked(True)
+        self.evaluate_cb.setToolTip("Auto-score clips on audio/visual/caption quality")
+        self.evaluate_cb.setStyleSheet(f"color: {COLORS['text']}; spacing: 5px;")
+
+        features_layout.addWidget(self.face_tracking_cb)
+        features_layout.addWidget(self.dedup_cb)
+        features_layout.addWidget(self.evaluate_cb)
+        features_layout.addStretch()
+        main_layout.addLayout(features_layout)
+
         # --- ACTION BUTTONS ---
         btn_layout = QHBoxLayout()
 
@@ -523,6 +565,11 @@ class ViralClipperUI(QMainWindow):
         else:
             aspect_ratio = "16:9"
 
+        # Read feature toggles
+        enable_face_tracking = self.face_tracking_cb.isChecked()
+        enable_dedup = self.dedup_cb.isChecked()
+        enable_eval = self.evaluate_cb.isChecked()
+
         target_dir = self.output_folder or os.path.dirname(self.selected_file)
 
         self.start_btn.setEnabled(False)
@@ -535,6 +582,7 @@ class ViralClipperUI(QMainWindow):
         self.append_log(f"  Output: {target_dir}")
         self.append_log(f"  Models: Whisper({whisper_model}) + LLM({llm_model})")
         self.append_log(f"  Clips: {target_clip_count} x ~{target_duration}s ({aspect_ratio})")
+        self.append_log(f"  Features: face_track={enable_face_tracking}, dedup={enable_dedup}, eval={enable_eval}")
 
         self.pipeline.start_thread(
             video_path=self.selected_file,
@@ -545,6 +593,9 @@ class ViralClipperUI(QMainWindow):
             target_clip_count=target_clip_count,
             target_duration=target_duration,
             aspect_ratio=aspect_ratio,
+            enable_face_tracking=enable_face_tracking,
+            enable_similarity_dedup=enable_dedup,
+            enable_evaluation=enable_eval,
         )
 
     def stop_pipeline(self) -> None:

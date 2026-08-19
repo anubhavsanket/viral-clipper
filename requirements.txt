@@ -12,6 +12,18 @@ torch
 torchaudio
 --extra-index-url https://download.pytorch.org/whl/cu118
 
+# Embedding similarity (clip dedup)
+sentence-transformers
+numpy
+
+# Face tracking
+mediapipe
+opencv-python-headless
+
+# Web API
+fastapi
+uvicorn
+
 # LLM Integration
 ollama
 
