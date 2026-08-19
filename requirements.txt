@@ -1,13 +1,19 @@
+# ViralClipper AI - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core UI
 PyQt6
 pillow
-openai-whisper
-whisperx
-ctranslate2==4.4.0
-faster-whisper==1.0.3
 requests
-matplotlib
-moviepy
+
+# AI / ML (transcription via faster-whisper, no pyannote needed)
+faster-whisper
 torch
 torchaudio
-torchvision
 --extra-index-url https://download.pytorch.org/whl/cu118
+
+# LLM Integration
+ollama
+
+# Reporting
+matplotlib

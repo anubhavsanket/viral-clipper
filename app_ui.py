@@ -1,18 +1,24 @@
-import sys
-import subprocess
-import os
-import importlib.util
-import json
+"""
+ViralClipper AI - PyQt6 Desktop GUI.
+Dark-themed dashboard for video clip generation with real-time progress tracking.
+"""
 
-# --- 1. CRITICAL PATH FIX FOR PORTABLE PYTHON ---
+import importlib.util
+import os
+import subprocess
+import sys
+from typing import Optional
+
+# --- PATH FIX FOR PORTABLE PYTHON ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
 
-# --- 2. DEPENDENCY AUTO-INSTALLER ---
-def install_dependencies():
-    """Checks for GUI libs and installs them to the embedded python."""
-    required = ["PyQt6", "requests", "pillow"] 
+
+# --- DEPENDENCY AUTO-INSTALLER ---
+def install_dependencies() -> None:
+    """Check for GUI libs and install them to the embedded python."""
+    required = ["PyQt6", "requests", "pillow"]
     missing = []
 
     for lib in required:
@@ -20,34 +26,40 @@ def install_dependencies():
             missing.append(lib)
 
     if missing:
-        print(f"⚠️ First Run: Installing UI libraries ({', '.join(missing)})...")
-        print("   This might take a minute...")
+        print(f"First Run: Installing UI libraries ({', '.join(missing)})...")
         try:
             subprocess.check_call([
-                sys.executable, "-m", "pip", "install", 
-                "--upgrade", "pip", "--no-warn-script-location"
+                sys.executable, "-m", "pip", "install",
+                "--upgrade", "pip", "--no-warn-script-location",
             ])
             subprocess.check_call([
-                sys.executable, "-m", "pip", "install", 
-                "--prefer-binary", *missing, "--no-warn-script-location"
+                sys.executable, "-m", "pip", "install",
+                "--prefer-binary", *missing, "--no-warn-script-location",
             ])
-            print("✅ Dependencies installed. Launching UI...")
+            print("Dependencies installed. Launching UI...")
         except Exception as e:
-            print(f"❌ Failed to install dependencies: {e}")
+            print(f"Failed to install dependencies: {e}")
             input("Press Enter to exit...")
             sys.exit(1)
+
 
 if __name__ == "__main__":
     install_dependencies()
 
-# --- 3. IMPORTS ---
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QLabel, QPushButton, QFileDialog, 
-                             QProgressBar, QTextEdit, QComboBox, QFrame, QMessageBox)
-from PyQt6.QtCore import Qt, pyqtSignal, QObject
-from PyQt6.QtGui import QFont, QPalette, QColor, QIcon
 
-# Import backend logic safely
+# --- IMPORTS ---
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout,
+    QHBoxLayout, QLabel, QPushButton, QFileDialog,
+    QProgressBar, QTextEdit, QComboBox, QFrame, QMessageBox,
+    QLineEdit, QSplitter, QSlider, QSpinBox, QGroupBox,
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent
+
+from config import SUPPORTED_VIDEO_EXTENSIONS, SubtitleStyle
+
+# Import backend safely
 try:
     import pipeline_manager
 except ImportError as e:
@@ -55,163 +67,175 @@ except ImportError as e:
     input("Press Enter to exit...")
     sys.exit(1)
 
-# --- 4. SIGNALS CLASS ---
+
+# --- STYLE CONSTANTS ---
+COLORS = {
+    "bg": "#191919",
+    "surface": "#2D2D2D",
+    "surface_light": "#333333",
+    "border": "#444444",
+    "border_light": "#555555",
+    "primary": "#007ACC",
+    "primary_hover": "#0069B4",
+    "success": "#00C853",
+    "success_hover": "#00B248",
+    "danger": "#D50000",
+    "danger_hover": "#B71C1C",
+    "text": "#E0E0E0",
+    "text_muted": "#AAAAAA",
+    "text_dim": "#888888",
+    "text_input": "#CCCCCC",
+    "log_bg": "#0A0A0A",
+    "log_text": "#00E676",
+}
+
+VIDEO_FILTER = "Video Files ({})".format(
+    " ".join(f"*{ext}" for ext in SUPPORTED_VIDEO_EXTENSIONS)
+)
+
+
+# --- SIGNALS CLASS ---
 class StreamSignals(QObject):
+    """Thread-safe Qt signals for updating UI from background threads."""
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
 
-# --- 5. MAIN UI CLASS ---
+
+# --- MAIN UI CLASS ---
 class ViralClipperUI(QMainWindow):
+    """Main application window for ViralClipper AI."""
+
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Viral Clipper AI - Pro Dashboard")
-        self.resize(1000, 750)
+        self.setWindowTitle("ViralClipper AI - Pro Dashboard")
+        self.resize(1100, 880)
 
-        # 1. SETUP UI FIRST
+        # Initialize state
+        self.selected_file: Optional[str] = None
+        self.output_folder: Optional[str] = None
+
+        # Build UI
         self.setup_ui()
         self.apply_dark_theme()
 
-        # 2. Initialize Signals
+        # Thread-safe signals
         self.signals = StreamSignals()
         self.signals.log_signal.connect(self.append_log)
         self.signals.progress_signal.connect(self.update_progress)
 
-        # 3. Initialize Pipeline
+        # Pipeline manager
         self.pipeline = pipeline_manager.PipelineManager(
             log_callback=self.signals.log_signal.emit,
-            progress_callback=self.signals.progress_signal.emit
+            progress_callback=self.signals.progress_signal.emit,
         )
 
-        # Initial Log
-        self.append_log("✅ System Ready. HandBrakeCLI bundled successfully.")
-        self.append_log(f"📂 Root Directory: {current_dir}")
+        self.append_log("System Ready.")
+        self.append_log(f"Root Directory: {current_dir}")
+        self.append_log(f"GPU Detected: {'Yes' if __import__('config').USE_GPU else 'No'}")
 
-        # 4. Fetch Ollama Models
-        self.fetch_ollama_models()
+        # Fetch Ollama models AFTER the window is visible
+        QTimer.singleShot(200, self.fetch_ollama_models)
 
-    def fetch_ollama_models(self):
-        """Fetches available models from Ollama and updates the combo box."""
-        self.append_log("🔍 Scanning for local Ollama models...")
-        try:
-            # Run 'ollama list' command
-            # Using creationflags to hide the console window on Windows
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-
-            result = subprocess.run(
-                ["ollama", "list"], 
-                capture_output=True, 
-                text=True, 
-                creationflags=creationflags
-            )
-
-            if result.returncode == 0:
-                # Parse output. Output format is typically:
-                # NAME            ID              SIZE      MODIFIED
-                # gemma:2b        b50d6c999e59    1.7 GB    2 hours ago
-
-                lines = result.stdout.strip().split('\n')
-                models = []
-
-                # Skip header row (NAME, ID, etc.)
-                for line in lines[1:]:
-                    parts = line.split()
-                    if parts:
-                        models.append(parts[0]) # The name is the first column
-
-                if models:
-                    self.llm_combo.clear()
-                    self.llm_combo.addItems(models)
-                    self.append_log(f"✅ Found {len(models)} local AI models.")
-                else:
-                    self.append_log("⚠️ No models found in Ollama. Using defaults.")
-            else:
-                self.append_log("⚠️ Could not contact Ollama. Is it running?")
-
-        except FileNotFoundError:
-            self.append_log("❌ Error: 'ollama' command not found. Please install Ollama.")
-        except Exception as e:
-            self.append_log(f"❌ Error fetching models: {e}")
-
-    def setup_ui(self):
-        # Main Widget
+    def setup_ui(self) -> None:
+        """Build the complete UI layout."""
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
-        main_layout.setSpacing(15)
-        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(30, 25, 30, 25)
+
+        # Enable drag-and-drop on main window
+        self.setAcceptDrops(True)
 
         # --- HEADER ---
-        header_label = QLabel("🚀 Viral Clipper AI Pipeline")
-        header_label.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
-        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header_label.setStyleSheet("color: #E0E0E0; margin-bottom: 20px;")
-        main_layout.addWidget(header_label)
+        header = QLabel("Viral Clipper AI Pipeline")
+        header.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+        header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.setStyleSheet(f"color: {COLORS['text']}; margin-bottom: 15px;")
+        main_layout.addWidget(header)
 
         # --- INPUT ROW ---
         input_layout = QHBoxLayout()
-        self.input_field = QTextEdit()
-        self.input_field.setPlaceholderText("Select Video File...")
-        self.input_field.setFixedHeight(45)
+        self.input_field = QLineEdit()
+        self.input_field.setPlaceholderText("Select or drag a video file...")
+        self.input_field.setFixedHeight(42)
         self.input_field.setReadOnly(True)
-        self.input_field.setStyleSheet("background-color: #2D2D2D; color: #CCC; border: 1px solid #444; border-radius: 5px; padding: 5px;")
+        self.input_field.setStyleSheet(
+            f"background-color: {COLORS['surface']}; color: {COLORS['text_input']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 5px; padding: 5px 10px;"
+        )
 
-        browse_input_btn = QPushButton("Browse Input")
-        browse_input_btn.setFixedSize(130, 45)
-        browse_input_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        browse_input_btn.setStyleSheet("""
-            QPushButton { background-color: #007ACC; color: white; border-radius: 5px; font-weight: bold; }
-            QPushButton:hover { background-color: #0069B4; }
-        """)
-        browse_input_btn.clicked.connect(self.select_video)
+        browse_input = QPushButton("Browse Input")
+        browse_input.setFixedSize(130, 42)
+        browse_input.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_input.setStyleSheet(self._button_style(COLORS["primary"], COLORS["primary_hover"]))
+        browse_input.clicked.connect(self.select_video)
 
         input_layout.addWidget(self.input_field)
-        input_layout.addWidget(browse_input_btn)
+        input_layout.addWidget(browse_input)
         main_layout.addLayout(input_layout)
 
         # --- OUTPUT ROW ---
         output_layout = QHBoxLayout()
-        self.output_field = QTextEdit()
-        self.output_field.setPlaceholderText("Select Output Folder (Optional)...")
-        self.output_field.setFixedHeight(45)
+        self.output_field = QLineEdit()
+        self.output_field.setPlaceholderText("Select output folder (optional)...")
+        self.output_field.setFixedHeight(42)
         self.output_field.setReadOnly(True)
-        self.output_field.setStyleSheet("background-color: #2D2D2D; color: #CCC; border: 1px solid #444; border-radius: 5px; padding: 5px;")
+        self.output_field.setStyleSheet(
+            f"background-color: {COLORS['surface']}; color: {COLORS['text_input']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 5px; padding: 5px 10px;"
+        )
 
-        browse_output_btn = QPushButton("Browse Output")
-        browse_output_btn.setFixedSize(130, 45)
-        browse_output_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        browse_output_btn.setStyleSheet("""
-            QPushButton { background-color: #007ACC; color: white; border-radius: 5px; font-weight: bold; }
-            QPushButton:hover { background-color: #0069B4; }
-        """)
-        browse_output_btn.clicked.connect(self.select_output)
+        browse_output = QPushButton("Browse Output")
+        browse_output.setFixedSize(130, 42)
+        browse_output.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_output.setStyleSheet(self._button_style(COLORS["primary"], COLORS["primary_hover"]))
+        browse_output.clicked.connect(self.select_output)
 
         output_layout.addWidget(self.output_field)
-        output_layout.addWidget(browse_output_btn)
+        output_layout.addWidget(browse_output)
         main_layout.addLayout(output_layout)
 
-        # --- SETTINGS ROW (Whisper & LLM) ---
+        # --- ANALYSIS PROMPT ROW ---
+        prompt_layout = QHBoxLayout()
+        prompt_label = QLabel("Analysis Prompt:")
+        prompt_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        prompt_label.setStyleSheet(f"color: {COLORS['text']};")
+
+        self.prompt_field = QLineEdit()
+        self.prompt_field.setPlaceholderText("Identify the most viral, funny, or engaging moments...")
+        self.prompt_field.setFixedHeight(42)
+        self.prompt_field.setStyleSheet(
+            f"background-color: {COLORS['surface']}; color: {COLORS['text_input']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 5px; padding: 5px 10px;"
+        )
+        self.prompt_field.setText("Identify the most viral, funny, or engaging moments. Look for complete stories with setup, hook, and payoff.")
+
+        prompt_layout.addWidget(prompt_label)
+        prompt_layout.addWidget(self.prompt_field)
+        main_layout.addLayout(prompt_layout)
+
+        # --- SETTINGS ROW ---
         settings_layout = QHBoxLayout()
         settings_layout.setSpacing(15)
-        settings_layout.setContentsMargins(0, 10, 0, 10)
+        settings_layout.setContentsMargins(0, 5, 0, 5)
 
-        # Whisper Label & Combo
         lbl_whisper = QLabel("Whisper Model:")
         lbl_whisper.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        lbl_whisper.setStyleSheet(f"color: {COLORS['text']};")
         self.whisper_combo = QComboBox()
         self.whisper_combo.addItems(["base", "small", "medium", "large"])
-        self.whisper_combo.setFixedWidth(100)
-        self.whisper_combo.setStyleSheet("padding: 5px; background-color: #333; color: white; border: 1px solid #555;")
+        self.whisper_combo.setFixedWidth(110)
+        self.whisper_combo.setStyleSheet(self._combo_style())
 
-        # LLM Label & Combo
-        lbl_llm = QLabel("Viral AI Model:")
+        lbl_llm = QLabel("AI Model:")
         lbl_llm.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        lbl_llm.setStyleSheet(f"color: {COLORS['text']};")
         self.llm_combo = QComboBox()
-        # Default items in case fetch fails
-        self.llm_combo.addItems(["gemma:2b", "mistral:7b", "llama3:8b"])
         self.llm_combo.setEditable(True)
-        self.llm_combo.setFixedWidth(150)
-        self.llm_combo.setStyleSheet("padding: 5px; background-color: #333; color: white; border: 1px solid #555;")
+        self.llm_combo.setFixedWidth(160)
+        self.llm_combo.setStyleSheet(self._combo_style())
 
         settings_layout.addWidget(lbl_whisper)
         settings_layout.addWidget(self.whisper_combo)
@@ -222,6 +246,89 @@ class ViralClipperUI(QMainWindow):
 
         main_layout.addLayout(settings_layout)
 
+        # --- CLIP SETTINGS ROW ---
+        clip_group = QGroupBox("Clip Settings")
+        clip_group.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        clip_group.setStyleSheet(f"""
+            QGroupBox {{
+                color: {COLORS['text']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 15px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 5px;
+            }}
+        """)
+        clip_layout = QHBoxLayout(clip_group)
+        clip_layout.setSpacing(20)
+
+        # Clip Count
+        clip_count_layout = QVBoxLayout()
+        lbl_clip_count = QLabel("Number of Clips:")
+        lbl_clip_count.setStyleSheet(f"color: {COLORS['text_muted']};")
+        clip_count_row = QHBoxLayout()
+        self.clip_count_slider = QSlider(Qt.Orientation.Horizontal)
+        self.clip_count_slider.setRange(1, 20)
+        self.clip_count_slider.setValue(5)
+        self.clip_count_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.clip_count_slider.setTickInterval(1)
+        self.clip_count_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                height: 6px; background: {COLORS['surface_light']}; border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {COLORS['primary']}; width: 16px; height: 16px;
+                margin: -5px 0; border-radius: 8px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {COLORS['primary']}; border-radius: 3px;
+            }}
+        """)
+        self.clip_count_label = QLabel("5")
+        self.clip_count_label.setFixedWidth(25)
+        self.clip_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.clip_count_label.setStyleSheet(f"color: {COLORS['text']}; font-weight: bold;")
+        self.clip_count_slider.valueChanged.connect(
+            lambda v: self.clip_count_label.setText(str(v))
+        )
+        clip_count_row.addWidget(self.clip_count_slider)
+        clip_count_row.addWidget(self.clip_count_label)
+        clip_count_layout.addWidget(lbl_clip_count)
+        clip_count_layout.addLayout(clip_count_row)
+        clip_layout.addLayout(clip_count_layout)
+
+        # Clip Duration
+        clip_duration_layout = QVBoxLayout()
+        lbl_duration = QLabel("Clip Duration:")
+        lbl_duration.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self.duration_combo = QComboBox()
+        self.duration_combo.addItems(["30s", "60s", "90s", "120s", "180s"])
+        self.duration_combo.setCurrentText("90s")
+        self.duration_combo.setFixedWidth(100)
+        self.duration_combo.setStyleSheet(self._combo_style())
+        clip_duration_layout.addWidget(lbl_duration)
+        clip_duration_layout.addWidget(self.duration_combo)
+        clip_layout.addLayout(clip_duration_layout)
+
+        # Aspect Ratio
+        aspect_layout = QVBoxLayout()
+        lbl_aspect = QLabel("Aspect Ratio:")
+        lbl_aspect.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self.aspect_combo = QComboBox()
+        self.aspect_combo.addItems(["9:16 (Vertical)", "1:1 (Square)", "16:9 (Horizontal)"])
+        self.aspect_combo.setFixedWidth(150)
+        self.aspect_combo.setStyleSheet(self._combo_style())
+        aspect_layout.addWidget(lbl_aspect)
+        aspect_layout.addWidget(self.aspect_combo)
+        clip_layout.addLayout(aspect_layout)
+
+        clip_layout.addStretch()
+        main_layout.addWidget(clip_group)
+
         # --- ACTION BUTTONS ---
         btn_layout = QHBoxLayout()
 
@@ -229,21 +336,14 @@ class ViralClipperUI(QMainWindow):
         self.start_btn.setFixedHeight(55)
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        self.start_btn.setStyleSheet("""
-            QPushButton { background-color: #00C853; color: white; border-radius: 5px; }
-            QPushButton:hover { background-color: #00B248; }
-            QPushButton:disabled { background-color: #444; color: #888; }
-        """)
+        self.start_btn.setStyleSheet(self._button_style(COLORS["success"], COLORS["success_hover"]))
         self.start_btn.clicked.connect(self.start_pipeline)
 
         self.stop_btn = QPushButton("STOP")
         self.stop_btn.setFixedHeight(55)
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        self.stop_btn.setStyleSheet("""
-            QPushButton { background-color: #D50000; color: white; border-radius: 5px; }
-            QPushButton:hover { background-color: #B71C1C; }
-        """)
+        self.stop_btn.setStyleSheet(self._button_style(COLORS["danger"], COLORS["danger_hover"]))
         self.stop_btn.clicked.connect(self.stop_pipeline)
         self.stop_btn.setEnabled(False)
 
@@ -254,107 +354,231 @@ class ViralClipperUI(QMainWindow):
         # --- PROGRESS BAR ---
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(10)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar { border: none; background-color: #333; border-radius: 5px; }
-            QProgressBar::chunk { background-color: #4CAF50; border-radius: 5px; }
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                border: none; background-color: {COLORS['surface_light']};
+                border-radius: 5px;
+                color: white;
+                font-size: 11px;
+                font-weight: bold;
+                text-align: center;
+            }}
+            QProgressBar::chunk {{
+                background-color: #4CAF50; border-radius: 5px;
+            }}
         """)
         self.progress_bar.setValue(0)
         main_layout.addWidget(self.progress_bar)
 
-        # --- LOGS HEADER ---
+        # --- LOGS ---
         lbl_logs = QLabel("System Logs:")
         lbl_logs.setFont(QFont("Segoe UI", 10))
-        lbl_logs.setStyleSheet("color: #AAA; margin-top: 10px;")
+        lbl_logs.setStyleSheet(f"color: {COLORS['text_muted']}; margin-top: 8px;")
         main_layout.addWidget(lbl_logs)
 
-        # --- LOG WINDOW ---
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
-        self.log_output.setStyleSheet("""
-            QTextEdit {
-                background-color: #0A0A0A; 
-                color: #00E676; 
-                font-family: Consolas; 
-                font-size: 10pt; 
-                border: 1px solid #333;
+        self.log_output.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {COLORS['log_bg']};
+                color: {COLORS['log_text']};
+                font-family: Consolas;
+                font-size: 10pt;
+                border: 1px solid {COLORS['surface_light']};
                 border-radius: 3px;
-            }
+            }}
         """)
         main_layout.addWidget(self.log_output)
 
-    def apply_dark_theme(self):
+    def apply_dark_theme(self) -> None:
+        """Apply dark palette to the application."""
         palette = QPalette()
         palette.setColor(QPalette.ColorRole.Window, QColor(25, 25, 25))
         palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.white)
         self.setPalette(palette)
 
-    def select_video(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select Video", "", "Video Files (*.mp4 *.mkv *.mov)")
+    @staticmethod
+    def _button_style(bg: str, hover: str) -> str:
+        """Generate a QPushButton stylesheet."""
+        return (
+            f"QPushButton {{ background-color: {bg}; color: white; border-radius: 5px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background-color: {hover}; }}"
+            f"QPushButton:disabled {{ background-color: {COLORS['surface']}; color: {COLORS['text_dim']}; }}"
+        )
+
+    @staticmethod
+    def _combo_style() -> str:
+        """Generate a QComboBox stylesheet."""
+        return (
+            f"padding: 5px; background-color: {COLORS['surface_light']}; "
+            f"color: white; border: 1px solid {COLORS['border_light']};"
+        )
+
+    # --- OLLAMA MODEL DETECTION ---
+    def fetch_ollama_models(self) -> None:
+        """Fetch available models from Ollama and populate the combo box."""
+        self.append_log("Scanning for local Ollama models...")
+        try:
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            result = subprocess.run(
+                ["ollama", "list"],
+                capture_output=True, text=True,
+                creationflags=creationflags,
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.strip().split("\n")
+                models = []
+                # Skip header row (NAME, ID, SIZE, MODIFIED)
+                for line in lines[1:]:
+                    parts = line.split()
+                    if parts:
+                        models.append(parts[0])
+
+                if models:
+                    self.llm_combo.clear()
+                    self.llm_combo.addItems(models)
+                    self.append_log(f"Found {len(models)} local AI models.")
+                else:
+                    self.append_log("No models found in Ollama. Using defaults.")
+            else:
+                self.append_log("Could not contact Ollama. Is it running?")
+
+        except FileNotFoundError:
+            self.append_log("'ollama' command not found. Please install Ollama.")
+        except Exception as e:
+            self.append_log(f"Error fetching models: {e}")
+
+    # --- DRAG AND DROP ---
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept drag events that contain file URLs."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Handle dropped files."""
+        urls = event.mimeData().urls()
+        if urls:
+            file_path = urls[0].toLocalFile()
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext in SUPPORTED_VIDEO_EXTENSIONS:
+                self.selected_file = file_path
+                self.input_field.setText(file_path)
+                self.append_log(f"Input (dragged): {os.path.basename(file_path)}")
+            else:
+                QMessageBox.warning(
+                    self, "Unsupported Format",
+                    f"File type '{ext}' is not supported.\n"
+                    f"Supported: {', '.join(SUPPORTED_VIDEO_EXTENSIONS)}",
+                )
+
+    # --- FILE SELECTION ---
+    def select_video(self) -> None:
+        """Open file dialog to select a video file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Video", "", VIDEO_FILTER,
+        )
         if file_path:
             self.selected_file = file_path
             self.input_field.setText(file_path)
-            self.append_log(f"📄 Input Selected: {os.path.basename(file_path)}")
+            self.append_log(f"Input Selected: {os.path.basename(file_path)}")
 
-    def select_output(self):
+    def select_output(self) -> None:
+        """Open folder dialog to select an output directory."""
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
         if folder:
             self.output_folder = folder
             self.output_field.setText(folder)
-            self.append_log(f"📂 Output Folder Set: {folder}")
+            self.append_log(f"Output Folder Set: {folder}")
 
-    def start_pipeline(self):
-        if not hasattr(self, 'selected_file'):
+    # --- PIPELINE CONTROL ---
+    def start_pipeline(self) -> None:
+        """Start the clip generation pipeline."""
+        if not self.selected_file:
             QMessageBox.warning(self, "No File", "Please select a video file first!")
             return
 
-        # Get settings
-        whisper_model = self.whisper_combo.currentText()
-        llm_model = self.llm_combo.currentText()
-        prompt = "Identify the most viral, funny, or engaging moments."
+        if not os.path.exists(self.selected_file):
+            QMessageBox.warning(
+                self, "File Not Found",
+                f"The selected file no longer exists:\n{self.selected_file}",
+            )
+            return
 
-        # Determine output dir
-        target_dir = self.output_folder if hasattr(self, 'output_folder') else os.path.dirname(self.selected_file)
+        whisper_model = self.whisper_combo.currentText()
+        llm_model = self.llm_combo.currentText().strip()
+        prompt = self.prompt_field.text().strip()
+
+        # Read clip settings
+        target_clip_count = self.clip_count_slider.value()
+        duration_text = self.duration_combo.currentText().replace("s", "")
+        target_duration = int(duration_text)
+
+        # Parse aspect ratio
+        aspect_text = self.aspect_combo.currentText()
+        if "9:16" in aspect_text:
+            aspect_ratio = "9:16"
+        elif "1:1" in aspect_text:
+            aspect_ratio = "1:1"
+        else:
+            aspect_ratio = "16:9"
+
+        target_dir = self.output_folder or os.path.dirname(self.selected_file)
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
         self.log_output.clear()
 
-        self.append_log(f"🚀 Starting Pipeline...")
-        self.append_log(f"   ► Input: {os.path.basename(self.selected_file)}")
-        self.append_log(f"   ► Output: {target_dir}")
-        self.append_log(f"   ► Models: Whisper({whisper_model}) + LLM({llm_model})")
+        self.append_log("Starting Pipeline...")
+        self.append_log(f"  Input: {os.path.basename(self.selected_file)}")
+        self.append_log(f"  Output: {target_dir}")
+        self.append_log(f"  Models: Whisper({whisper_model}) + LLM({llm_model})")
+        self.append_log(f"  Clips: {target_clip_count} x ~{target_duration}s ({aspect_ratio})")
 
         self.pipeline.start_thread(
-            video_path=self.selected_file, 
-            model_name=llm_model, 
+            video_path=self.selected_file,
+            model_name=llm_model,
             prompt=prompt,
             output_dir=target_dir,
-            whisper_model=whisper_model
+            whisper_model=whisper_model,
+            target_clip_count=target_clip_count,
+            target_duration=target_duration,
+            aspect_ratio=aspect_ratio,
         )
 
-    def stop_pipeline(self):
+    def stop_pipeline(self) -> None:
+        """Signal the pipeline to stop."""
         self.pipeline.stop()
-        self.append_log("🛑 Stopping pipeline... please wait.")
+        self.append_log("Stopping pipeline... please wait.")
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
-    def append_log(self, message):
+    # --- LOGGING & PROGRESS ---
+    def append_log(self, message: str) -> None:
+        """Append a message to the log window and auto-scroll."""
         self.log_output.append(message)
-        # Auto-scroll
         cursor = self.log_output.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         self.log_output.setTextCursor(cursor)
 
-        if "Pipeline Finished" in message or "Pipeline Failed" in message:
+        # Re-enable buttons on pipeline completion or failure
+        if "Pipeline Completed" in message or "Pipeline Failed" in message:
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
 
-    def update_progress(self, value):
+    def update_progress(self, value: int) -> None:
+        """Update the progress bar."""
         self.progress_bar.setValue(value)
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Application entry point."""
     app = QApplication(sys.argv)
     window = ViralClipperUI()
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

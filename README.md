@@ -1,11 +1,11 @@
-#  ViralClipper
+# 🚀 ViralClipper AI
 
 > **Your Local "OpusClip" Alternative.**  
 > Automatically turn long videos into viral, captioned shorts using local AI. No cloud fees, total privacy.
 
 ---
 
-## Features
+## 🔥 Features
 *   **Privacy First:** Runs 100% offline using `Ollama` and `WhisperX`.
 *   **AI Virality:** Uses LLMs (Gemma/Llama) to find the funniest or most engaging hooks.
 *   **Hormozi Captions:** Auto-generates punchy, word-level animated subtitles (yellow/white style).
@@ -14,12 +14,12 @@
     *   **Analyze:** `Ollama` (Context-aware clipping).
     *   **Edit:** `FFmpeg` & `HandBrake` (9:16 Crop + Burn-in).
 *   **Dual Mode:**
-    *    **UI Dashboard:** Interactive drag-and-drop (`Start_App.bat`).
-    *    **Batch Mode:** Process entire folders overnight (`5_batch_runner.py`).
+    *   🖥️ **UI Dashboard:** Interactive drag-and-drop (`Start_App.bat`).
+    *   ⚙️ **Batch Mode:** Process entire folders overnight (`5_batch_runner.py`).
 
 ---
 
-##  Requirements
+## 🛠️ Requirements
 
 ### Hardware
 *   **OS:** Windows 10/11
@@ -34,7 +34,7 @@
 
 ---
 
-##  Installation
+## 📦 Installation
 
 1.  **Clone/Download** this repository.
 2.  **Install Python Dependencies**:
@@ -52,7 +52,7 @@
 
 ---
 
-##  How to Run
+## 🎬 How to Run
 
 ### Option A: The Dashboard (Recommended)
 Double-click **`Start_App.bat`**.
@@ -70,7 +70,7 @@ Double-click **`Start_App.bat`**.
 
 ---
 
-##  Project Structure
+## 📂 Project Structure
 
 | File | Purpose |
 | :--- | :--- |
@@ -84,7 +84,7 @@ Double-click **`Start_App.bat`**.
 
 ---
 
-##  Troubleshooting
+## 🐛 Troubleshooting
 
 *   **"Ollama not found"**: Ensure `ollama serve` is running in a separate terminal window.
 *   **"HandBrakeCLI missing"**: Download the command-line version of HandBrake and place it in the project root or `bin/`.

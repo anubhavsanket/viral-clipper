@@ -6,9 +6,7 @@ venv/
 env/
 .env
 python/
-debug.bat
-Start_App-test.bat
-ViralClipperAI.spec
+
 
 
 # Binary Tools (Too large for Git)
@@ -30,3 +28,9 @@ temp_work/
 # IDE settings
 .vscode/
 .idea/
+
+
+Start_App-test.bat
+ViralClipperAI.spec
+debug.bat
+workflow-rough.md

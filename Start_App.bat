@@ -8,21 +8,30 @@ echo       ViralClipper AI - Dashboard Launcher
 echo ========================================================
 echo.
 
-:: 1. Check if Python is installed globally
-python --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Python is not found in your system PATH.
-    echo Please install Python 3.10 and ensure "Add to PATH" is checked.
-    pause
-    exit /b
+:: 1. Try embedded Python first (has all deps pre-installed)
+set "PY_PATH=python\python.exe"
+if exist "%PY_PATH%" (
+    echo [System] Using embedded Python 3.10
+    "%PY_PATH%" app_ui.py
+    goto :DONE
 )
 
-:: 2. Launch App
-echo [System] Launching App UI...
-python app_ui.py
+:: 2. Fallback to system Python
+python --version >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo [System] Using system Python (ensure deps are installed)
+    python app_ui.py
+    goto :DONE
+)
 
+echo [ERROR] No Python found.
+echo Please ensure the 'python' folder exists or install Python 3.10.
+pause
+exit /b
+
+:DONE
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo ❌ App crashed or closed with an error.
+    echo App crashed or closed with an error.
     pause
 )
